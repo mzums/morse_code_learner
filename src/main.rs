@@ -1,3 +1,6 @@
+use std::{collections::VecDeque, time::Instant};
+
+
 #[derive(Debug)]
 struct ProgressionLevel {
     level: u8,
@@ -6,24 +9,69 @@ struct ProgressionLevel {
     accuracy_requirement: f32,
 }
 
-const LEVELS_DATA: &[(u8, &[char], f32, f32)] = &[
-    (1, &['E', 'T'], 10.0, 0.7),
-    (2, &['A', 'I', 'M', 'N'], 9.0, 0.75),
-    (3, &['D', 'G', 'K', 'O', 'R', 'S', 'U', 'W'], 8.5, 0.8),
-    (4, &['B', 'C', 'F', 'H', 'J', 'L', 'P', 'Q', 'V', 'X', 'Y', 'Z'], 7.0, 0.85),
-    (5, &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'], 7.0, 0.9),
+#[derive(Debug)]
+struct ProgressionSystem {
+    levels: Vec<ProgressionLevel>,
+}
+
+struct MorseTutor {
+    progression: ProgressionSystem,
+    practice_queue: VecDeque<char>,
+    session_start: Instant,
+    correct_answers: u32,
+    total_answers: u32,
+}
+
+const MORSE_MAPPING: [(char, &str); 36] = [
+    ('A', ".-"), ('B', "-..."), ('C', "-.-."), ('D', "-.."), ('E', "."), ('F', "..-."),
+    ('G', "--."), ('H', "...."), ('I', ".."), ('J', ".---"), ('K', "-.-"), ('L', ".-.."),
+    ('M', "--"), ('N', "-."), ('O', "---"), ('P', ".--."), ('Q', "--.-"), ('R', ".-."),
+    ('S', "..."), ('T', "-"), ('U', "..-"), ('V', "...-"), ('W', ".--"), ('X', "-..-"),
+    ('Y', "-.--"), ('Z', "--.."), ('1', ".----"), ('2', "..---"), ('3', "...--"),
+    ('4', "....-"), ('5', "....."), ('6', "-...."), ('7', "--..."), ('8', "---.."),
+    ('9', "----."), ('0', "-----"),
 ];
 
-fn get_levels() -> Vec<ProgressionLevel> {
-    LEVELS_DATA
-        .iter()
-        .map(|(level, chars, speed, accuracy)| ProgressionLevel {
-            level: *level,
-            chars_to_learn: chars.to_vec(),
-            speed_requirement: *speed,
-            accuracy_requirement: *accuracy,
-        })
-        .collect()
+
+impl ProgressionSystem {
+    fn new() -> Self {
+        let levels = vec![
+            ProgressionLevel {
+                level: 1,
+                chars_to_learn: vec!['E', 'T'],
+                speed_requirement: 5.0,
+                accuracy_requirement: 0.7,
+            },
+            ProgressionLevel {
+                level: 2,
+                chars_to_learn: vec!['A', 'I', 'M', 'N'],
+                speed_requirement: 4.0,
+                accuracy_requirement: 0.75,
+            },
+            ProgressionLevel {
+                level: 3,
+                chars_to_learn: vec!['D', 'G', 'K', 'O', 'R', 'S', 'U', 'W'],
+                speed_requirement: 3.5,
+                accuracy_requirement: 0.8,
+            },
+            ProgressionLevel {
+                level: 4,
+                chars_to_learn: vec!['B', 'C', 'F', 'H', 'J', 'L', 'P', 'Q', 'V', 'X', 'Y', 'Z'],
+                speed_requirement: 3.0,
+                accuracy_requirement: 0.85,
+            },
+            ProgressionLevel {
+                level: 5,
+                chars_to_learn: vec!['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+                speed_requirement: 2.5,
+                accuracy_requirement: 0.9,
+            },
+        ];
+        
+        ProgressionSystem {
+            levels
+        }
+    }
 }
 
 fn main() {
@@ -31,6 +79,6 @@ fn main() {
     println!("              MORSE CODE LEARNER");
     println!("================================================");
 
-    let levels = get_levels();
-    print!("{:?}", levels);
+    ProgressionSystem::new();
+    println!("{:?}", ProgressionSystem::new());
 }
