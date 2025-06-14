@@ -41,12 +41,17 @@ struct ProgressionSystem {
 struct ProgressionLevel {
     level: u8,
     chars_to_learn: Vec<char>,
+    speed_requirement: f32,
+    accuracy_requirement: f32,
 }
 
 struct MorseTutor {
     config: AppConfig,
     progression: ProgressionSystem,
     practice_queue: VecDeque<char>,
+    session_start: Instant,
+    correct_answers: u32,
+    total_answers: u32,
 }
 
 const MORSE_MAPPING: [(char, &str); 36] = [
@@ -68,6 +73,9 @@ impl MorseTutor {
             config: config.clone(),
             progression,
             practice_queue: VecDeque::new(),
+            session_start: Instant::now(),
+            correct_answers: 0,
+            total_answers: 0,
         };
         
         app.generate_practice_queue();
@@ -95,22 +103,22 @@ impl MorseTutor {
 
     fn end_session(&mut self) {
         if let Err(e) = self.config.save() {
-            eprintln!("Error saving config: {}", e);
+            eprintln!("Error saving configuration: {}", e);
         }
-        
+
         self.update_progression();
     }
 
     fn practice_char(&mut self, c: char) -> bool {
         let morse_code = Self::char_to_morse(c).unwrap_or("");
         println!("\n--- New char ---");
-        println!("Level: {} | Exercises left: {}", 
+        println!("Level: {} | 'Exercises left': {}", 
             self.config.difficulty_level,
             self.practice_queue.len()
         );
         println!("Character: {}", c);
         
-        print!("Morse code (use . and -): ");
+        print!("Your Morse code: {} (press Enter to submit): ", morse_code);
         io::stdout().flush().unwrap();
         
         let start_time = Instant::now();
@@ -121,7 +129,10 @@ impl MorseTutor {
         let input = input.trim().to_uppercase();
         let correct = input == morse_code;
         
+        self.total_answers += 1;
+        
         if correct {
+            self.correct_answers += 1;
             println!("✓ Correct! (time: {:.1}s)", response_time);
         } else {
             println!("✗ Incorrect! Correct code: {} (your: {})", morse_code, input);
@@ -136,7 +147,20 @@ impl MorseTutor {
             .map(|(_, code)| *code)
     }
 
-    fn run(&mut self) {        
+    fn start_session(&mut self) {
+        println!("\nNew session started!");
+        println!("Difficulty level: {}", self.config.difficulty_level);
+        println!("Characters to learn: {}", self.config.known_chars.iter().collect::<String>());
+        println!("Exercise number: {}", self.practice_queue.len());
+        println!("------------------------------------------------");
+
+        self.session_start = Instant::now();
+        self.correct_answers = 0;
+        self.total_answers = 0;
+    }
+
+    fn run(&mut self) {
+        self.start_session();       
         while let Some(&current_char) = self.practice_queue.front() {
             let correct = self.practice_char(current_char);
             
@@ -164,23 +188,41 @@ impl MorseTutor {
     }
 
     fn update_progression(&mut self) {
-        self.config.difficulty_level += 1;
-        println!("\n🎉 Next level {}!", self.config.difficulty_level);
-        
-        if let Some(next_level) = self.progression.levels.iter().find(|l| l.level == self.config.difficulty_level) {
-            for c in &next_level.chars_to_learn {
-                if !self.config.known_chars.contains(c) {
-                    self.config.known_chars.push(*c);
-                    println!("+ New char added: {}", c);
+        let current_level = self.config.difficulty_level;
+        if let Some(level) = self.progression.levels.iter().find(|l| l.level == current_level) {
+            let accuracy = if self.total_answers > 0 {
+                self.correct_answers as f32 / self.total_answers as f32
+            } else {
+                0.0
+            };
+            
+            println!("\nLevel requirements {}:", current_level);
+            println!("- Accuracy: {:.1}% (required: {:.1}%)", 
+                accuracy * 100.0, level.accuracy_requirement * 100.0);
+
+            if accuracy >= level.accuracy_requirement {
+                self.config.difficulty_level += 1;
+                println!("\n🎉 Next level: {}!", self.config.difficulty_level);
+                
+                if let Some(next_level) = self.progression.levels.iter().find(|l| l.level == self.config.difficulty_level) {
+                    for c in &next_level.chars_to_learn {
+                        if !self.config.known_chars.contains(c) {
+                            self.config.known_chars.push(*c);
+                            println!("+ New character added: {}", c);
+                        }
+                    }
                 }
+                
+                self.generate_practice_queue();
+            } else {
+                println!("\nℹ️ Continue on current level.");
+            }
+
+            if let Err(e) = self.config.save() {
+                eprintln!("Error saving configuration: {}", e);
             }
         }
-        
-        self.generate_practice_queue();
-        if let Err(e) = self.config.save() {
-            eprintln!("Error saving config: {}", e);
-        }
-}
+    }
 }
 
 impl AppConfig {
@@ -226,22 +268,32 @@ impl ProgressionSystem {
             ProgressionLevel {
                 level: 1,
                 chars_to_learn: vec!['E', 'T'],
+                speed_requirement: 5.0,
+                accuracy_requirement: 0.8,
             },
             ProgressionLevel {
                 level: 2,
                 chars_to_learn: vec!['A', 'I', 'M', 'N'],
+                speed_requirement: 4.0,
+                accuracy_requirement: 0.85,
             },
             ProgressionLevel {
                 level: 3,
                 chars_to_learn: vec!['D', 'G', 'K', 'O', 'R', 'S', 'U', 'W'],
+                speed_requirement: 3.5,
+                accuracy_requirement: 0.9,
             },
             ProgressionLevel {
                 level: 4,
                 chars_to_learn: vec!['B', 'C', 'F', 'H', 'J', 'L', 'P', 'Q', 'V', 'X', 'Y', 'Z'],
+                speed_requirement: 3.0,
+                accuracy_requirement: 0.95,
             },
             ProgressionLevel {
                 level: 5,
                 chars_to_learn: vec!['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+                speed_requirement: 2.5,
+                accuracy_requirement: 0.95,
             },
         ];
         
