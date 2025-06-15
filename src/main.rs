@@ -40,7 +40,9 @@ struct UserStats {
 #[derive(Debug, Serialize, Deserialize)]
 struct LearningSession {
     timestamp: String,
+    duration: u32,
     chars_practiced: Vec<char>,
+    accuracy: f32,
     difficulty: u8,
 }
 
@@ -59,6 +61,7 @@ struct ProgressionLevel {
 
 struct MorseTutor {
     config: AppConfig,
+    stats: UserStats,
     progression: ProgressionSystem,
     practice_queue: VecDeque<char>,
     session_start: Instant,
@@ -107,10 +110,12 @@ where
 impl MorseTutor {
     fn new() -> Self {
         let config = AppConfig::load().unwrap_or_default();
+        let stats = UserStats::load().unwrap_or_default();
         let progression = ProgressionSystem::new();
         
         let mut app = MorseTutor {
             config: config.clone(),
+            stats,
             progression,
             practice_queue: VecDeque::new(),
             session_start: Instant::now(),
@@ -142,10 +147,30 @@ impl MorseTutor {
     }
 
     fn end_session(&mut self) {
+        let duration = self.session_start.elapsed().as_secs() as u32;
+        let accuracy = if self.total_answers > 0 {
+            self.correct_answers as f32 / self.total_answers as f32
+        } else {
+            0.0
+        };
+        
+        if let Some(session) = self.stats.session_history.last_mut() {
+            session.duration = duration;
+            session.accuracy = accuracy;
+        }
+        
+        self.stats.sessions_completed += 1;
+        self.stats.accuracy = (self.stats.accuracy * (self.stats.sessions_completed - 1) as f32 + accuracy) / 
+                            self.stats.sessions_completed as f32;
+
         if let Err(e) = self.config.save() {
             eprintln!("Error saving configuration: {}", e);
         }
 
+        if let Err(e) = self.stats.save() {
+            eprintln!("Error saving stats: {}", e);
+        }
+        
         self.update_progression();
     }
 
@@ -170,7 +195,8 @@ impl MorseTutor {
         let correct = input == morse_code;
         
         self.total_answers += 1;
-        
+        self.stats.response_times.insert(c, response_time);
+
         if correct {
             self.correct_answers += 1;
             println!("✓ Correct! (time: {:.1}s)", response_time);
@@ -193,6 +219,15 @@ impl MorseTutor {
         println!("Characters to learn: {}", self.config.known_chars.iter().collect::<String>());
         println!("Exercise number: {}", self.practice_queue.len());
         println!("------------------------------------------------");
+
+        self.session_start = Instant::now();
+        self.stats.session_history.push(LearningSession {
+            timestamp: chrono::Local::now().to_rfc3339(),
+            duration: 0,
+            chars_practiced: self.config.known_chars.clone(),
+            accuracy: 0.0,
+            difficulty: self.config.difficulty_level,
+        });
 
         self.session_start = Instant::now();
         self.correct_answers = 0;
@@ -235,12 +270,22 @@ impl MorseTutor {
             } else {
                 0.0
             };
+
+            let avg_time = if !self.stats.response_times.is_empty() {
+                self.stats.response_times.values().sum::<f32>() / 
+                self.stats.response_times.len() as f32
+            } else {
+                0.0
+            };
             
             println!("\nLevel requirements {}:", current_level);
             println!("- Accuracy: {:.1}% (required: {:.1}%)", 
                 accuracy * 100.0, level.accuracy_requirement * 100.0);
 
-            if accuracy >= level.accuracy_requirement {
+            println!("- Average time: {:.1}s (required: {:.1}s)", 
+                avg_time, level.speed_requirement);
+
+            if avg_time <= level.speed_requirement && accuracy >= level.accuracy_requirement {
                 self.config.difficulty_level += 1;
                 println!("\n🎉 Next level: {}!", self.config.difficulty_level);
                 
