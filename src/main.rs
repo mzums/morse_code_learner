@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppConfig {
     difficulty_level: u8,
+    session_duration: u32,
     known_chars: Vec<char>,
 }
 
@@ -21,6 +22,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
             difficulty_level: 1,
+            session_duration: 1,
             known_chars: vec![],
         }
     }
@@ -171,6 +173,7 @@ impl MorseTutor {
             eprintln!("Error saving stats: {}", e);
         }
         
+        self.show_summary();
         self.update_progression();
     }
 
@@ -237,6 +240,11 @@ impl MorseTutor {
     fn run(&mut self) {
         self.start_session();       
         while let Some(&current_char) = self.practice_queue.front() {
+
+            if self.session_start.elapsed().as_secs() > self.config.session_duration as u64 * 60 {
+                println!("\n⏰ Time passed!");
+                break;
+            }
             let correct = self.practice_char(current_char);
             
             if correct {
@@ -260,6 +268,39 @@ impl MorseTutor {
         }
         
         self.end_session();
+    }
+
+    fn show_summary(&self) {
+        let duration = self.session_start.elapsed().as_secs() as u32;
+        let minutes = duration / 60;
+        let seconds = duration % 60;
+        let accuracy = if self.total_answers > 0 {
+            (self.correct_answers as f32 / self.total_answers as f32) * 100.0
+        } else {
+            0.0
+        };
+        
+        println!("\n================================================");
+        println!("                SESSION SUMMARY");
+        println!("================================================");
+        println!("Duration:      {:02}:{:02}", minutes, seconds);
+        println!("Exercise number:    {}", self.total_answers);
+        println!("Correct answers: {}/{} ({:.1}%)", 
+            self.correct_answers, self.total_answers, accuracy);
+        println!("Difficultyi:  {}", self.config.difficulty_level);
+        
+        if !self.stats.response_times.is_empty() {
+            println!("\nReaction times:");
+            for (c, &time) in &self.stats.response_times {
+                println!("  {}: {:.1}s", c, time);
+            }
+            
+            let avg_time: f32 = self.stats.response_times.values().sum::<f32>() / 
+                               self.stats.response_times.len() as f32;
+            println!("Average reaction time: {:.1}s", avg_time);
+        }
+        
+        println!("================================================");
     }
 
     fn update_progression(&mut self) {
@@ -394,19 +435,37 @@ impl ProgressionSystem {
             },
             ProgressionLevel {
                 level: 3,
-                chars_to_learn: vec!['D', 'G', 'K', 'O', 'R', 'S', 'U', 'W'],
+                chars_to_learn: vec!['D', 'G', 'K', 'O'],
                 speed_requirement: 3.5,
                 accuracy_requirement: 0.9,
             },
             ProgressionLevel {
                 level: 4,
-                chars_to_learn: vec!['B', 'C', 'F', 'H', 'J', 'L', 'P', 'Q', 'V', 'X', 'Y', 'Z'],
+                chars_to_learn: vec!['R', 'S', 'U', 'W'],
+                speed_requirement: 3.5,
+                accuracy_requirement: 0.9,
+            },
+            ProgressionLevel {
+                level: 5,
+                chars_to_learn: vec!['B', 'C', 'F', 'H', 'J', 'L'],
                 speed_requirement: 3.0,
                 accuracy_requirement: 0.95,
             },
             ProgressionLevel {
-                level: 5,
-                chars_to_learn: vec!['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+                level: 6,
+                chars_to_learn: vec!['P', 'Q', 'V', 'X', 'Y', 'Z'],
+                speed_requirement: 3.0,
+                accuracy_requirement: 0.95,
+            },
+            ProgressionLevel {
+                level: 7,
+                chars_to_learn: vec!['0', '1', '2', '3', '4'],
+                speed_requirement: 2.5,
+                accuracy_requirement: 0.95,
+            },
+            ProgressionLevel {
+                level: 7,
+                chars_to_learn: vec!['5', '6', '7', '8', '9'],
                 speed_requirement: 2.5,
                 accuracy_requirement: 0.95,
             },
