@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{VecDeque, HashMap},
     fs,
     io::{self, Write},
     path::PathBuf,
@@ -8,6 +8,7 @@ use std::{
 use rand::{seq::SliceRandom, rng};
 use directories::ProjectDirs;
 use serde_derive::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -23,6 +24,17 @@ impl Default for AppConfig {
             known_chars: vec![],
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct UserStats {
+    sessions_completed: u32,
+    chars_learned: u32,
+    accuracy: f32,
+    #[serde(serialize_with = "serialize_response_times")]
+    #[serde(deserialize_with = "deserialize_response_times")]
+    response_times: HashMap<char, f32>,
+    session_history: Vec<LearningSession>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,6 +75,34 @@ const MORSE_MAPPING: [(char, &str); 36] = [
     ('4', "....-"), ('5', "....."), ('6', "-...."), ('7', "--..."), ('8', "---.."),
     ('9', "----."), ('0', "-----"),
 ];
+
+fn serialize_response_times<S>(
+    map: &HashMap<char, f32>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let string_map: HashMap<String, f32> = map
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+    string_map.serialize(serializer)
+}
+
+fn deserialize_response_times<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<char, f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let string_map = HashMap::<String, f32>::deserialize(deserializer)?;
+    let char_map = string_map
+        .into_iter()
+        .map(|(k, v)| (k.chars().next().unwrap(), v))
+        .collect();
+    Ok(char_map)
+}
 
 impl MorseTutor {
     fn new() -> Self {
@@ -258,6 +298,36 @@ impl AppConfig {
         fs::write(&path, data)?;
         
         println!("Config saved");
+        Ok(())
+    }
+}
+
+impl UserStats {
+    fn stats_path() -> PathBuf {
+        if let Some(proj_dirs) = ProjectDirs::from("com", "MorseTutor", "Morse Tutor") {
+            proj_dirs.data_dir().join("stats.toml")
+        } else {
+            PathBuf::from("stats.toml")
+        }
+    }
+
+    fn load() -> Result<Self, Box<dyn std::error::Error>> {
+        let path = Self::stats_path();
+        if path.exists() {
+            let data = fs::read_to_string(&path)?;
+            toml::from_str(&data).map_err(|e| e.into())
+        } else {
+            Ok(UserStats::default())
+        }
+    }
+
+    fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::stats_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let data = toml::to_string(self)?;
+        fs::write(path, data)?;
         Ok(())
     }
 }
