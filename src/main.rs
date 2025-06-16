@@ -6,10 +6,8 @@ use std::{
     time::Instant,
 };
 use rand::{seq::SliceRandom, rng};
-use directories::ProjectDirs;
 use serde_derive::{Serialize, Deserialize};
 use serde::{Deserialize, Serialize};
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppConfig {
@@ -32,10 +30,12 @@ impl Default for AppConfig {
 struct UserStats {
     sessions_completed: u32,
     chars_learned: u32,
+    words_learned: u32,
     accuracy: f32,
     #[serde(serialize_with = "serialize_response_times")]
     #[serde(deserialize_with = "deserialize_response_times")]
     response_times: HashMap<char, f32>,
+    word_response_times: HashMap<String, f32>,
     session_history: Vec<LearningSession>,
 }
 
@@ -44,6 +44,7 @@ struct LearningSession {
     timestamp: String,
     duration: u32,
     chars_practiced: Vec<char>,
+    words_practiced: Vec<String>,
     accuracy: f32,
     difficulty: u8,
 }
@@ -51,6 +52,7 @@ struct LearningSession {
 #[derive(Debug)]
 struct ProgressionSystem {
     levels: Vec<ProgressionLevel>,
+    common_words: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -65,10 +67,11 @@ struct MorseTutor {
     config: AppConfig,
     stats: UserStats,
     progression: ProgressionSystem,
-    practice_queue: VecDeque<char>,
+    practice_queue: VecDeque<String>,
     session_start: Instant,
     correct_answers: u32,
     total_answers: u32,
+    is_word_level: bool,
 }
 
 const MORSE_MAPPING: [(char, &str); 36] = [
@@ -115,6 +118,8 @@ impl MorseTutor {
         let stats = UserStats::load().unwrap_or_default();
         let progression = ProgressionSystem::new();
         
+        let is_word_level = config.difficulty_level >= 9;
+        
         let mut app = MorseTutor {
             config: config.clone(),
             stats,
@@ -123,6 +128,7 @@ impl MorseTutor {
             session_start: Instant::now(),
             correct_answers: 0,
             total_answers: 0,
+            is_word_level,
         };
         
         app.generate_practice_queue();
@@ -130,21 +136,35 @@ impl MorseTutor {
     }
 
     fn generate_practice_queue(&mut self) {
-        let mut rng = rng();
-        let mut chars = self.config.known_chars.clone();
-        chars.shuffle(&mut rng);
+        self.practice_queue.clear();
         
-        if let Some(level) = self.progression.levels.iter().find(|l| l.level == self.config.difficulty_level) {
-            for c in &level.chars_to_learn {
-                if !chars.contains(c) {
-                    chars.push(*c);
+        if self.is_word_level {
+            let mut rng = rng();
+            let mut selected_words = self.progression.common_words.clone();
+            selected_words.shuffle(&mut rng);
+            
+            for word in selected_words.into_iter().take(10) {
+                self.practice_queue.push_back(word);
+            }
+        } else {
+            let mut rng = rng();
+            let mut chars = self.config.known_chars.clone();
+            chars.shuffle(&mut rng);
+            
+            if let Some(level) = self.progression.levels.iter()
+                .find(|l| l.level == self.config.difficulty_level) 
+            {
+                for c in &level.chars_to_learn {
+                    if !chars.contains(c) {
+                        chars.push(*c);
+                    }
                 }
             }
-        }
-        
-        self.practice_queue.clear();
-        for c in &chars {
-            self.practice_queue.push_back(*c);
+            for _ in 0..5 {
+                for c in &chars {
+                    self.practice_queue.push_back(c.to_string());
+                }
+            }
         }
     }
 
@@ -159,6 +179,14 @@ impl MorseTutor {
         if let Some(session) = self.stats.session_history.last_mut() {
             session.duration = duration;
             session.accuracy = accuracy;
+            
+            if self.is_word_level {
+                session.words_practiced = self.practice_queue.iter().cloned().collect();
+            } else {
+                session.chars_practiced = self.practice_queue.iter()
+                    .filter_map(|s| s.chars().next())
+                    .collect();
+            }
         }
         
         self.stats.sessions_completed += 1;
@@ -177,16 +205,23 @@ impl MorseTutor {
         self.update_progression();
     }
 
-    fn practice_char(&mut self, c: char) -> bool {
-        let morse_code = Self::char_to_morse(c).unwrap_or("");
-        println!("\n--- New char ---");
-        println!("Level: {} | 'Exercises left': {}", 
+    fn practice_item(&mut self, item: &str) -> bool {
+        let morse_code = if self.is_word_level {
+            self.encode_word(item)
+        } else {
+            Self::char_to_morse(item.chars().next().unwrap())
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        };
+        
+        println!("\n--- {} ---", if self.is_word_level { "New Word" } else { "New Char" });
+        println!("Level: {} | Exercises left: {}", 
             self.config.difficulty_level,
             self.practice_queue.len()
         );
-        println!("Character: {}", c);
+        println!("{}: {}", if self.is_word_level { "Word" } else { "Character" }, item);
         
-        print!("Your Morse code: {} (press Enter to submit): ", morse_code);
+        print!("Your Morse code: ");
         io::stdout().flush().unwrap();
         
         let start_time = Instant::now();
@@ -198,7 +233,16 @@ impl MorseTutor {
         let correct = input == morse_code;
         
         self.total_answers += 1;
-        self.stats.response_times.insert(c, response_time);
+        
+        if self.is_word_level {
+            self.stats.word_response_times.insert(item.to_string(), response_time);
+            self.stats.words_learned += 1;
+        } else {
+            if let Some(c) = item.chars().next() {
+                self.stats.response_times.insert(c, response_time);
+                self.stats.chars_learned += 1;
+            }
+        }
 
         if correct {
             self.correct_answers += 1;
@@ -215,11 +259,36 @@ impl MorseTutor {
             .find(|(ch, _)| *ch == c.to_ascii_uppercase())
             .map(|(_, code)| *code)
     }
+    
+    fn encode_word(&self, word: &str) -> String {
+        word.chars()
+            .filter_map(Self::char_to_morse)
+            .collect::<Vec<&str>>()
+            .join(" ")
+    }
 
     fn start_session(&mut self) {
         println!("\nNew session started!");
         println!("Difficulty level: {}", self.config.difficulty_level);
-        println!("Characters to learn: {}", self.config.known_chars.iter().collect::<String>());
+        
+        if self.is_word_level {
+            println!("Mode: Word Practice (10 common words)");
+        } else {
+            if let Some(level) = self.progression.levels.iter()
+                .find(|l| l.level == self.config.difficulty_level) 
+            {
+                let mut chars: Vec<char> = self.config.known_chars.clone();
+                for c in &level.chars_to_learn {
+                    if !chars.contains(c) {
+                        chars.push(*c);
+                    }
+                }
+                println!("Characters to learn: {}", chars.iter().collect::<String>());
+            } else {
+                println!("Characters to learn: {}", self.config.known_chars.iter().collect::<String>());
+            }
+        }
+        
         println!("Exercise number: {}", self.practice_queue.len());
         println!("------------------------------------------------");
 
@@ -227,31 +296,33 @@ impl MorseTutor {
         self.stats.session_history.push(LearningSession {
             timestamp: chrono::Local::now().to_rfc3339(),
             duration: 0,
-            chars_practiced: self.config.known_chars.clone(),
+            chars_practiced: vec![],
+            words_practiced: vec![],
             accuracy: 0.0,
             difficulty: self.config.difficulty_level,
         });
 
-        self.session_start = Instant::now();
         self.correct_answers = 0;
         self.total_answers = 0;
     }
 
     fn run(&mut self) {
         self.start_session();       
-        while let Some(&current_char) = self.practice_queue.front() {
-
-            if self.session_start.elapsed().as_secs() > self.config.session_duration as u64 * 60 {
+        while let Some(current_item) = self.practice_queue.front().cloned() {
+            if !self.is_word_level && 
+               self.session_start.elapsed().as_secs() > self.config.session_duration as u64 * 60 
+            {
                 println!("\n⏰ Time passed!");
                 break;
             }
-            let correct = self.practice_char(current_char);
+            
+            let correct = self.practice_item(&current_item);
             
             if correct {
                 self.practice_queue.pop_front();
             } else {
-                if let Some(c) = self.practice_queue.pop_front() {
-                    self.practice_queue.push_back(c);
+                if let Some(item) = self.practice_queue.pop_front() {
+                    self.practice_queue.push_back(item);
                 }
             }
             
@@ -287,17 +358,19 @@ impl MorseTutor {
         println!("Exercise number:    {}", self.total_answers);
         println!("Correct answers: {}/{} ({:.1}%)", 
             self.correct_answers, self.total_answers, accuracy);
-        println!("Difficultyi:  {}", self.config.difficulty_level);
-        
-        if !self.stats.response_times.is_empty() {
-            println!("\nReaction times:");
-            for (c, &time) in &self.stats.response_times {
-                println!("  {}: {:.1}s", c, time);
+        println!("Difficulty:  {}", self.config.difficulty_level);
+
+        if !self.is_word_level {
+            if !self.stats.response_times.is_empty() {
+                println!("\nCharacter statistics:");
+                for (c, time) in &self.stats.response_times {
+                    println!("  {}: {:.1}s", c, time);
+                }
+                
+                let avg_time: f32 = self.stats.response_times.values().sum::<f32>() / 
+                                   self.stats.response_times.len() as f32;
+                println!("Average reaction time: {:.1}s", avg_time);
             }
-            
-            let avg_time: f32 = self.stats.response_times.values().sum::<f32>() / 
-                               self.stats.response_times.len() as f32;
-            println!("Average reaction time: {:.1}s", avg_time);
         }
         
         println!("================================================");
@@ -305,6 +378,13 @@ impl MorseTutor {
 
     fn update_progression(&mut self) {
         let current_level = self.config.difficulty_level;
+        
+        if self.is_word_level {
+            println!("\nCongrats! You're practicing words!");
+            println!("Continue to improve your word encoding speed.");
+            return;
+        }
+        
         if let Some(level) = self.progression.levels.iter().find(|l| l.level == current_level) {
             let accuracy = if self.total_answers > 0 {
                 self.correct_answers as f32 / self.total_answers as f32
@@ -328,20 +408,28 @@ impl MorseTutor {
 
             if avg_time <= level.speed_requirement && accuracy >= level.accuracy_requirement {
                 self.config.difficulty_level += 1;
-                println!("\n🎉 Next level: {}!", self.config.difficulty_level);
+                println!("\n🎉 Advanced to level {}!", self.config.difficulty_level);
                 
-                if let Some(next_level) = self.progression.levels.iter().find(|l| l.level == self.config.difficulty_level) {
-                    for c in &next_level.chars_to_learn {
-                        if !self.config.known_chars.contains(c) {
-                            self.config.known_chars.push(*c);
-                            println!("+ New character added: {}", c);
+                if self.config.difficulty_level == 9 {
+                    self.is_word_level = true;
+                    println!("🌟 CONGRATULATIONS! You've reached word level!");
+                    println!("Now you'll practice encoding common words.");
+                } else {
+                    if let Some(next_level) = self.progression.levels.iter()
+                        .find(|l| l.level == self.config.difficulty_level) 
+                    {
+                        for c in &next_level.chars_to_learn {
+                            if !self.config.known_chars.contains(c) {
+                                self.config.known_chars.push(*c);
+                                println!("+ New char added: {}", c);
+                            }
                         }
                     }
                 }
                 
                 self.generate_practice_queue();
             } else {
-                println!("\nℹ️ Continue on current level.");
+                println!("\nℹ️ Continue practicing on current level.");
             }
 
             if let Err(e) = self.config.save() {
@@ -353,11 +441,7 @@ impl MorseTutor {
 
 impl AppConfig {
     fn config_path() -> PathBuf {
-        if let Some(proj_dirs) = ProjectDirs::from("com", "MorseTutor", "Morse Tutor") {
-            proj_dirs.config_dir().join("config.toml")
-        } else {
-            PathBuf::from("config.toml")
-        }
+        PathBuf::from("morse_config.toml")
     }
 
     fn load() -> Result<Self, Box<dyn std::error::Error>> {
@@ -374,27 +458,19 @@ impl AppConfig {
 
     fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::config_path();
-        println!("Saving config to: {:?}", path);
-        
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         
-        let data = toml::to_string_pretty(self)?;
+        let data = toml::to_string(self)?;
         fs::write(&path, data)?;
-        
-        println!("Config saved");
         Ok(())
     }
 }
 
 impl UserStats {
     fn stats_path() -> PathBuf {
-        if let Some(proj_dirs) = ProjectDirs::from("com", "MorseTutor", "Morse Tutor") {
-            proj_dirs.data_dir().join("stats.toml")
-        } else {
-            PathBuf::from("stats.toml")
-        }
+        PathBuf::from("morse_stats.toml")
     }
 
     fn load() -> Result<Self, Box<dyn std::error::Error>> {
@@ -464,15 +540,50 @@ impl ProgressionSystem {
                 accuracy_requirement: 0.95,
             },
             ProgressionLevel {
-                level: 7,
+                level: 8,
                 chars_to_learn: vec!['5', '6', '7', '8', '9'],
                 speed_requirement: 2.5,
                 accuracy_requirement: 0.95,
             },
         ];
         
+        let common_words = match fs::read_to_string("common_words.txt") {
+            Ok(contents) => {
+                contents.lines()
+                    .map(|s| s.trim().to_uppercase())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            }
+            Err(_) => {
+                println!("Warning: common_words.txt not found. Using default words.");
+                vec![
+                    "THE".to_string(),
+                    "BE".to_string(),
+                    "TO".to_string(),
+                    "OF".to_string(),
+                    "AND".to_string(),
+                    "A".to_string(),
+                    "IN".to_string(),
+                    "THAT".to_string(),
+                    "HAVE".to_string(),
+                    "I".to_string(),
+                    "IT".to_string(),
+                    "FOR".to_string(),
+                    "NOT".to_string(),
+                    "ON".to_string(),
+                    "WITH".to_string(),
+                    "HE".to_string(),
+                    "AS".to_string(),
+                    "YOU".to_string(),
+                    "DO".to_string(),
+                    "AT".to_string(),
+                ]
+            }
+        };
+        
         ProgressionSystem {
-            levels
+            levels,
+            common_words,
         }
     }
 }
