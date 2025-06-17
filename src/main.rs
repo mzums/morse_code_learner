@@ -5,9 +5,20 @@ use std::{
     path::PathBuf,
     time::Instant,
 };
-use rand::{seq::SliceRandom, rng};
+use rand::{seq::SliceRandom, rngs::ThreadRng};
 use serde_derive::{Serialize, Deserialize};
 use serde::{Deserialize, Serialize};
+use chrono;
+
+const MORSE_MAPPING: [(char, &str); 36] = [
+    ('A', ".-"), ('B', "-..."), ('C', "-.-."), ('D', "-.."), ('E', "."), ('F', "..-."),
+    ('G', "--."), ('H', "...."), ('I', ".."), ('J', ".---"), ('K', "-.-"), ('L', ".-.."),
+    ('M', "--"), ('N', "-."), ('O', "---"), ('P', ".--."), ('Q', "--.-"), ('R', ".-."),
+    ('S', "..."), ('T', "-"), ('U', "..-"), ('V', "...-"), ('W', ".--"), ('X', "-..-"),
+    ('Y', "-.--"), ('Z', "--.."), ('1', ".----"), ('2', "..---"), ('3', "...--"),
+    ('4', "....-"), ('5', "....."), ('6', "-...."), ('7', "--..."), ('8', "---.."),
+    ('9', "----."), ('0', "-----"),
+];
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppConfig {
@@ -20,7 +31,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
             difficulty_level: 1,
-            session_duration: 1,
+            session_duration: 5,
             known_chars: vec![],
         }
     }
@@ -37,6 +48,34 @@ struct UserStats {
     response_times: HashMap<char, f32>,
     word_response_times: HashMap<String, f32>,
     session_history: Vec<LearningSession>,
+}
+
+fn serialize_response_times<S>(
+    map: &HashMap<char, f32>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let string_map: HashMap<String, f32> = map
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+    string_map.serialize(serializer)
+}
+
+fn deserialize_response_times<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<char, f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let string_map = HashMap::<String, f32>::deserialize(deserializer)?;
+    let char_map = string_map
+        .into_iter()
+        .map(|(k, v)| (k.chars().next().unwrap(), v))
+        .collect();
+    Ok(char_map)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,44 +111,7 @@ struct MorseTutor {
     correct_answers: u32,
     total_answers: u32,
     is_word_level: bool,
-}
-
-const MORSE_MAPPING: [(char, &str); 36] = [
-    ('A', ".-"), ('B', "-..."), ('C', "-.-."), ('D', "-.."), ('E', "."), ('F', "..-."),
-    ('G', "--."), ('H', "...."), ('I', ".."), ('J', ".---"), ('K', "-.-"), ('L', ".-.."),
-    ('M', "--"), ('N', "-."), ('O', "---"), ('P', ".--."), ('Q', "--.-"), ('R', ".-."),
-    ('S', "..."), ('T', "-"), ('U', "..-"), ('V', "...-"), ('W', ".--"), ('X', "-..-"),
-    ('Y', "-.--"), ('Z', "--.."), ('1', ".----"), ('2', "..---"), ('3', "...--"),
-    ('4', "....-"), ('5', "....."), ('6', "-...."), ('7', "--..."), ('8', "---.."),
-    ('9', "----."), ('0', "-----"),
-];
-
-fn serialize_response_times<S>(
-    map: &HashMap<char, f32>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let string_map: HashMap<String, f32> = map
-        .iter()
-        .map(|(k, v)| (k.to_string(), *v))
-        .collect();
-    string_map.serialize(serializer)
-}
-
-fn deserialize_response_times<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<char, f32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let string_map = HashMap::<String, f32>::deserialize(deserializer)?;
-    let char_map = string_map
-        .into_iter()
-        .map(|(k, v)| (k.chars().next().unwrap(), v))
-        .collect();
-    Ok(char_map)
+    rng: ThreadRng,
 }
 
 impl MorseTutor {
@@ -120,7 +122,7 @@ impl MorseTutor {
         
         let is_word_level = config.difficulty_level >= 9;
         
-        let mut app = MorseTutor {
+        MorseTutor {
             config: config.clone(),
             stats,
             progression,
@@ -129,27 +131,23 @@ impl MorseTutor {
             correct_answers: 0,
             total_answers: 0,
             is_word_level,
-        };
-        
-        app.generate_practice_queue();
-        app
+            rng: rand::rng(),
+        }
     }
 
     fn generate_practice_queue(&mut self) {
         self.practice_queue.clear();
         
         if self.is_word_level {
-            let mut rng = rng();
             let mut selected_words = self.progression.common_words.clone();
-            selected_words.shuffle(&mut rng);
+            selected_words.shuffle(&mut self.rng);
             
             for word in selected_words.into_iter().take(10) {
                 self.practice_queue.push_back(word);
             }
         } else {
-            let mut rng = rng();
             let mut chars = self.config.known_chars.clone();
-            chars.shuffle(&mut rng);
+            chars.shuffle(&mut self.rng);
             
             if let Some(level) = self.progression.levels.iter()
                 .find(|l| l.level == self.config.difficulty_level) 
@@ -160,6 +158,7 @@ impl MorseTutor {
                     }
                 }
             }
+            
             for _ in 0..5 {
                 for c in &chars {
                     self.practice_queue.push_back(c.to_string());
@@ -214,7 +213,7 @@ impl MorseTutor {
                 .unwrap_or_default()
         };
         
-        println!("\n--- {} ---", if self.is_word_level { "New Word" } else { "New Char" });
+        println!("\n--- New {} ---", if self.is_word_level { "Word" } else { "Character" });
         println!("Level: {} | Exercises left: {}", 
             self.config.difficulty_level,
             self.practice_queue.len()
@@ -268,6 +267,8 @@ impl MorseTutor {
     }
 
     fn start_session(&mut self) {
+        self.generate_practice_queue();
+        
         println!("\nNew session started!");
         println!("Difficulty level: {}", self.config.difficulty_level);
         
@@ -309,8 +310,7 @@ impl MorseTutor {
     fn run(&mut self) {
         self.start_session();       
         while let Some(current_item) = self.practice_queue.front().cloned() {
-            if !self.is_word_level && 
-               self.session_start.elapsed().as_secs() > self.config.session_duration as u64 * 60 
+            if self.session_start.elapsed().as_secs() > self.config.session_duration as u64 * 60 
             {
                 println!("\n⏰ Time passed!");
                 break;
@@ -360,7 +360,18 @@ impl MorseTutor {
             self.correct_answers, self.total_answers, accuracy);
         println!("Difficulty:  {}", self.config.difficulty_level);
 
-        if !self.is_word_level {
+        if self.is_word_level {
+            if !self.stats.word_response_times.is_empty() {
+                println!("\nWord statistics:");
+                for (word, time) in &self.stats.word_response_times {
+                    println!("  {}: {:.1}s", word, time);
+                }
+                
+                let avg_time: f32 = self.stats.word_response_times.values().sum::<f32>() / 
+                                   self.stats.word_response_times.len() as f32;
+                println!("Average reaction time: {:.1}s", avg_time);
+            }
+        } else {
             if !self.stats.response_times.is_empty() {
                 println!("\nCharacter statistics:");
                 for (c, time) in &self.stats.response_times {
@@ -590,7 +601,11 @@ impl ProgressionSystem {
 
 fn main() {
     println!("================================================");
-    println!("               MORSE CODE LEARNER");
+    println!("               MORSE CODE TUTOR");
+    println!("================================================");
+    println!("Progression system:");
+    println!("- Levels 1-8: Character encoding");
+    println!("- Level 9: Word encoding");
     println!("================================================");
     
     let mut app = MorseTutor::new();
