@@ -601,7 +601,7 @@ impl ProgressionSystem {
 
 fn main() {
     println!("================================================");
-    println!("               MORSE CODE TUTOR");
+    println!("               MORSE CODE LEARNER");
     println!("================================================");
     println!("Progression system:");
     println!("- Levels 1-8: Character encoding");
