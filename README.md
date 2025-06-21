@@ -35,3 +35,15 @@ cargo run --release
 1. Create configuration files if they don't exist
 2. Load your previous progress
 3. Start a new learning session based on your current level
+
+## Dependencies
+You should have Rust installed!
+- chrono = "0.4.41"
+- directories = "6.0.0"
+- rand = "0.9.1"
+- serde = "1.0.219"
+- serde_derive = "1.0.219"
+- toml = "0.8.23"
+
+## Why?
+I created this cool because I wanted to learn Morse code. But simply learning it from a website would be too boring.
